@@ -4,8 +4,7 @@
  * Import important stuff *
  **************************/
 
-// eslint-disable-next-line no-unused-vars
-const Bridge = require("./Bridge");
+const R = require("ramda");
 
 /***********************
  * The BridgeMap class *
@@ -46,22 +45,12 @@ class BridgeMap {
 		 */
 		this._telegramToBridge = new Map();
 
-		/**
-		 * Set of Discord servers which are bridged
-		 *
-		 * @type {Set}
-		 *
-		 * @private
-		 */
-		this._discordServers = new Set();
-
 		// Populate the maps and set
 		bridges.forEach((bridge) => {
 			const d = this._discordToBridge.get(bridge.discord.channelId) || [];
 			const t = this._telegramToBridge.get(bridge.telegram.chatId) || [];
 			this._discordToBridge.set(bridge.discord.channelId, [...d, bridge]);
 			this._telegramToBridge.set(bridge.telegram.chatId, [...t, bridge]);
-			this._discordServers.add(bridge.discord.serverId);
 		});
 	}
 
@@ -73,7 +62,7 @@ class BridgeMap {
 	 * @returns {Bridge[]}	The bridges corresponding to the chat ID
 	 */
 	fromTelegramChatId(telegramChatId) {
-		return this._telegramToBridge.get(telegramChatId);
+		return R.defaultTo([], this._telegramToBridge.get(telegramChatId));
 	}
 
 	/**
@@ -84,18 +73,7 @@ class BridgeMap {
 	 * @returns {Bridges[]}	The bridges corresponding to the channel ID
 	 */
 	fromDiscordChannelId(discordChannelId) {
-		return this._discordToBridge.get(discordChannelId);
-	}
-
-	/**
-	 * Checks if a Discord server ID is known
-	 *
-	 * @param {String} discordServerId	Discord server ID to check
-	 *
-	 * @returns {Boolean}	True if the server is known, false otherwise
-	 */
-	knownDiscordServer(discordServerId) {
-		return this._discordServers.has(discordServerId);
+		return R.defaultTo([], this._discordToBridge.get(discordChannelId));
 	}
 }
 

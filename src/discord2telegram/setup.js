@@ -11,6 +11,10 @@ const LatestDiscordMessageIds = require("./LatestDiscordMessageIds");
 const handleEmbed = require("./handleEmbed");
 const relayOldMessages = require("./relayOldMessages");
 const Bridge = require("../bridgestuff/Bridge");
+const path = require("path");
+const R = require("ramda");
+const { sleepOneMinute } = require("../sleep");
+const helpers = require("./helpers");
 
 /***********
  * Helpers *
@@ -22,7 +26,7 @@ const Bridge = require("../bridgestuff/Bridge");
  * @param {Logger} logger	The Logger instance to log messages to
  * @param {String} verb	Either "joined" or "left"
  * @param {BridgeMap} bridgeMap	Map of existing bridges
- * @param {BotAPI} tgBot	The Telegram bot to send the messages to
+ * @param {Telegraf} tgBot	The Telegram bot to send the messages to
  *
  * @returns {Function}	Function which can be given to the 'guildMemberAdd' or 'guildMemberRemove' events of a Discord bot
  *
@@ -54,11 +58,13 @@ function makeJoinLeaveFunc(logger, verb, bridgeMap, tgBot) {
 
 				try {
 					// Send it
-					await tgBot.sendMessage({
+					await tgBot.telegram.sendMessage(
+						bridge.telegram.chatId,
 						text,
-						chat_id: bridge.telegram.chatId,
-						parse_mode: "HTML"
-					});
+						{
+							parse_mode: "HTML"
+						}
+					);
 				} catch (err) {
 					logger.error(`[${bridge.name}] Could not notify Telegram about a user that ${verb} Discord`, err);
 				}
@@ -75,15 +81,22 @@ function makeJoinLeaveFunc(logger, verb, bridgeMap, tgBot) {
  *
  * @param {Logger} logger	The Logger instance to log messages to
  * @param {Discord.Client} dcBot	The Discord bot
- * @param {BotAPI} tgBot	The Telegram bot
+ * @param {Telegraf} tgBot	The Telegram bot
  * @param {MessageMap} messageMap	Map between IDs of messages
  * @param {BridgeMap} bridgeMap	Map of the bridges to use
  * @param {Settings} settings	Settings to use
+ * @param {String} datadirPath	Path to the directory to put data files in
  */
-function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
+function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings, datadirPath) {
 	// Create the map of latest message IDs and bridges
-	const latestDiscordMessageIds = new LatestDiscordMessageIds(logger, "latestDiscordMessageIds.json");
+	const latestDiscordMessageIds = new LatestDiscordMessageIds(logger, path.join(datadirPath, "latestDiscordMessageIds.json"));
 	const useNickname = settings.discord.useNickname;
+
+	// Make a set to keep track of where the "This is an instance of TediCross..." message has been sent the last minute
+	const antiInfoSpamSet = new Set();
+
+	// Set of server IDs. Will be filled when the bot is ready
+	const knownServerIds = new Set();
 
 	// Listen for users joining the server
 	dcBot.on("guildMemberAdd", makeJoinLeaveFunc(logger, "joined", bridgeMap, tgBot));
@@ -103,20 +116,39 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 		if (message.channel.type === "text" && message.cleanContent === "/chatinfo") {
 			// It is. Give it
 			message.reply(
-				"serverId: " + message.guild.id + "\n" +
-				"channelId: " + message.channel.id + "\n"
-			);
+				"\nchannelId: '" + message.channel.id + "'"
+			)
+				.then(sleepOneMinute)
+				.then(info => Promise.all([
+					info.delete(),
+					message.delete()
+				]))
+				.catch(helpers.ignoreAlreadyDeletedError);
 
 			// Don't process the message any further
 			return;
 		}
 
 		// Get info about the sender
-		const senderName = (useNickname && message.member ? message.member.displayName : message.author.username) + (settings.telegram.colonAfterSenderName ? ":" : "");
+		const senderName = R.compose(
+			// Make it HTML safe
+			helpers.escapeHTMLSpecialChars,
+			// Add a colon if wanted
+			R.when(
+				R.always(settings.telegram.colonAfterSenderName),
+				senderName => senderName + ":"
+			),
+			// Figure out what name to use
+			R.ifElse(
+				message => useNickname && !R.isNil(message.member),
+				R.path(["member", "displayName"]),
+				R.path(["author", "username"])
+			)
+		)(message);
 
 		// Check if the message is from the correct chat
 		const bridges = bridgeMap.fromDiscordChannelId(message.channel.id);
-		if (bridges !== undefined) {
+		if (!R.isEmpty(bridges)) {
 			bridges.forEach(async (bridge) => {
 				// Ignore it if this is a telegram-to-discord bridge
 				if (bridge.direction === Bridge.DIRECTION_TELEGRAM_TO_DISCORD) {
@@ -129,11 +161,18 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 				// Check for attachments and pass them on
 				message.attachments.forEach(async ({url}) => {
 					try {
-						await tgBot.sendMessage({
-							chat_id: bridge.telegram.chatId,
-							text: `<b>${senderName}</b>\n<a href="${url}">${url}</a>`,
-							parse_mode: "HTML"
-						});
+						const textToSend = bridge.discord.sendUsernames
+							? `<b>${senderName}</b>\n<a href="${url}">${url}</a>`
+							: `<a href="${url}">${url}</a>`
+						;
+						const tgMessage = await tgBot.telegram.sendMessage(
+							bridge.telegram.chatId,
+							textToSend,
+							{
+								parse_mode: "HTML"
+							}
+						);
+						messageMap.insert(MessageMap.DISCORD_TO_TELEGRAM, bridge, message.id, tgMessage.message_id);
 					} catch (err) {
 						logger.error(`[${bridge.name}] Telegram did not accept an attachment:`, err);
 					}
@@ -151,12 +190,14 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 
 					try {
 						// Send it
-						tgBot.sendMessage({
+						tgBot.telegram.sendMessage(
+							bridge.telegram.chatId,
 							text,
-							chat_id: bridge.telegram.chatId,
-							parse_mode: "HTML",
-							disable_web_page_preview: true
-						});
+							{
+								parse_mode: "HTML",
+								disable_web_page_preview: true
+							}
+						);
 					} catch (err) {
 						logger.error(`[${bridge.name}] Telegram did not accept an embed:`, err);
 					}
@@ -170,11 +211,17 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 
 					// Pass the message on to Telegram
 					try {
-						const tgMessage = await tgBot.sendMessage({
-							chat_id: bridge.telegram.chatId,
-							text: `<b>${senderName}</b>\n${processedMessage}`,
-							parse_mode: "HTML"
-						});
+						const textToSend = bridge.discord.sendUsernames
+							? `<b>${senderName}</b>\n${processedMessage}`
+							: processedMessage
+						;
+						const tgMessage = await tgBot.telegram.sendMessage(
+							bridge.telegram.chatId,
+							textToSend,
+							{
+								parse_mode: "HTML"
+							}
+						);
 
 						// Make the mapping so future edits can work
 						messageMap.insert(MessageMap.DISCORD_TO_TELEGRAM, bridge, message.id, tgMessage.message_id);
@@ -184,15 +231,22 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 					}
 				}
 			});
-		} else if (message.channel.guild === undefined || !bridgeMap.knownDiscordServer(message.channel.guild.id)) {	// Check if it is the correct server
-			// The message is from the wrong chat. Inform the sender that this is a private bot
-			message.reply(
-				"This is an instance of a TediCross bot, bridging a chat in Telegram with one in Discord. "
-				+ "If you wish to use TediCross yourself, please download and create an instance. "
-				+ "You may join our Discord server (https://discord.gg/MfzGMzy) "
-				+ "or Telegram group (https://t.me/TediCrossSupport) for help. "
-				+ "See also https://github.com/TediCross/TediCross"
-			);
+		} else if (R.isNil(message.channel.guild) || !knownServerIds.has(message.channel.guild.id)) {	// Check if it is the correct server
+			// The message is from the wrong chat. Inform the sender that this is a private bot, if they have not been informed the last minute
+			if (!antiInfoSpamSet.has(message.channel.id)) {
+				antiInfoSpamSet.add(message.channel.id);
+
+				message.reply(
+					"This is an instance of a TediCross bot, bridging a chat in Telegram with one in Discord. "
+					+ "If you wish to use TediCross yourself, please download and create an instance. "
+					+ "See https://github.com/TediCross/TediCross"
+				)
+					// Delete it again after some time
+					.then(sleepOneMinute)
+					.then(message => message.delete())
+					.catch(helpers.ignoreAlreadyDeletedError)
+					.then(() => antiInfoSpamSet.delete(message.channel.id));
+			}
 		}
 	});
 
@@ -203,13 +257,8 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 			return;
 		}
 
-		// Ignore it if it's not from a known bridge
-		const bridges = bridgeMap.fromDiscordChannelId(newMessage.channel.id);
-		if (bridges === undefined) {
-			return;
-		}
-
-		bridges.forEach(async (bridge) => {
+		// Pass it on to the bridges
+		bridgeMap.fromDiscordChannelId(newMessage.channel.id).forEach(async (bridge) => {
 			try {
 				// Get the corresponding Telegram message ID
 				const [tgMessageId] = messageMap.getCorresponding(MessageMap.DISCORD_TO_TELEGRAM, bridge, newMessage.id);
@@ -221,17 +270,55 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 				const processedMessage = md2html(newMessage.cleanContent);
 
 				// Send the update to Telegram
-				await tgBot.editMessageText({
-					chat_id: bridge.telegram.chatId,
-					message_id: tgMessageId,
-					text: `<b>${senderName}</b>\n${processedMessage}`,
-					parse_mode: "HTML"
-				});
+				const textToSend = bridge.discord.sendUsernames
+					? `<b>${senderName}</b>\n${processedMessage}`
+					: processedMessage
+				;
+				await tgBot.telegram.editMessageText(
+					bridge.telegram.chatId,
+					tgMessageId,
+					null,
+					textToSend,
+					{
+						parse_mode: "HTML"
+					}
+				);
 			} catch (err) {
 				logger.error(`[${bridge.name}] Could not edit Telegram message:`, err);
 			}
 		});
 	});
+
+	// Listen for deleted messages
+	function onMessageDelete(message) {
+		// Check if it is a relayed message
+		const isFromTelegram = message.author.id === dcBot.user.id;
+
+		// Hand it on to the bridges
+		bridgeMap.fromDiscordChannelId(message.channel.id).forEach(async (bridge) => {
+			// Ignore it if cross deletion is disabled
+			if (!bridge.discord.crossDeleteOnTelegram) {
+				return;
+			}
+
+			try {
+				// Get the corresponding Telegram message IDs
+				const tgMessageIds = isFromTelegram
+					? messageMap.getCorrespondingReverse(MessageMap.DISCORD_TO_TELEGRAM, bridge, message.id)
+					: messageMap.getCorresponding(MessageMap.DISCORD_TO_TELEGRAM, bridge, message.id)
+				;
+
+				// Try to delete them
+				await Promise.all(
+					tgMessageIds.map((tgMessageId) => tgBot.telegram.deleteMessage(bridge.telegram.chatId, tgMessageId))
+				);
+			} catch (err) {
+				logger.error(`[${bridge.name}] Could not delete Telegram message:`, err);
+			}
+		});
+	}
+	dcBot.on("messageDelete", onMessageDelete);
+	dcBot.on("messageDeleteBulk", (messages) => [...messages.values()].forEach(onMessageDelete));
 
 	// Start the Discord bot
 	dcBot.login(settings.discord.token)
@@ -244,10 +331,10 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 
 		bridgeMap.bridges.forEach(async (bridge) => {
 			try {
-				await tgBot.sendMessage({
-					chat_id: bridge.telegram.chatId,
-					text: "**TEDICROSS**\nThe discord side of the bot disconnected! Please check the log"
-				});
+				await tgBot.telegram.sendMessage(
+					bridge.telegram.chatId,
+					"**TEDICROSS**\nThe discord side of the bot disconnected! Please check the log"
+				);
 			} catch (err) {
 				logger.error(`[${bridge.name}] Could not send message to Telegram:`, err);
 			}
@@ -307,6 +394,22 @@ function setup(logger, dcBot, tgBot, messageMap, bridgeMap, settings) {
 		dcBot.once("ready", () => {
 			// Log the event
 			logger.info(`Discord: ${dcBot.user.username} (${dcBot.user.id})`);
+
+			// Get the server IDs from the channels
+			R.compose(
+				// Add them to the known server ID set
+				R.reduce((knownServerIds, serverId) => knownServerIds.add(serverId), knownServerIds),
+				// Remove the invalid channels
+				R.filter(R.complement(R.isNil)),
+				// Extract the server IDs from the channels
+				R.map(R.path(["guild", "id"])),
+				// Get the channels
+				R.map(channelId => dcBot.channels.get(channelId)),
+				// Get the channel IDs
+				R.map(R.path(["discord", "channelId"])),
+				// Get the bridges
+				R.prop("bridges")
+			)(bridgeMap);
 
 			// Mark the bot as ready
 			resolve();

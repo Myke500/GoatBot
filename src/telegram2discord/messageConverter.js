@@ -10,6 +10,15 @@ const R = require("ramda");
 /***********
  * Helpers *
  ***********/
+
+// XXX This is also present in `handleEntities`. Merge somehow
+const findFn = (prop, regexp) => 
+	R.compose(
+		R.not,
+		R.isEmpty,
+		R.match(regexp),
+		R.prop(prop)
+	);
  
 /**
  * Gets the display name of a user
@@ -65,36 +74,34 @@ function getDisplayNameFromUser(user, useFirstNameInsteadOfUsername) {
 /**
  * Converts Telegram messages to appropriate from and text
  *
- * @param {Message} message	The Telegram message to convert
- * @param {BotAPI} tgBot	The Telegram bot
- * @param {Settings} settings	The settings to use
- * @param {Discord.Client} dcBot	The Discord bot
+ * @param {Object} ctx	The Telegraf context
  * @param {Bridge} bridge	The bridge the message is crossing
  *
  * @return {Object} A object containing message information as from, text etc
  */
-function messageConverter(message, tgBot, settings, dcBot, bridge) {
+function messageConverter(ctx, bridge) {
+	const message = ctx.tediCross.message;
+
 	// Convert the text to Discord format
-	const text = handleEntities(message.text, message.entities, dcBot, bridge);
+	const text = handleEntities(message.text, message.entities, ctx.TediCross.dcBot, bridge);
 
 	// Handle for the reply object
 	let reply = null;
 
 	// Find out who the message is from
-	let fromName = getDisplayName(message.from, message.chat, settings.telegram.useFirstNameInsteadOfUsername);
+	let fromName = getDisplayName(message.from, message.chat, ctx.TediCross.settings.telegram.useFirstNameInsteadOfUsername);
 
 	// Check if it is a reply
-	if (message.reply_to_message !== undefined) {
-
+	if (!R.isNil(ctx.tediCross.replyTo)) {
 		// Get the name of the user this is a reply to
-		let originalAuthor = getDisplayName(message.reply_to_message.from, message.chat, settings.telegram.useFirstNameInsteadOfUsername);
+		let originalAuthor = getDisplayName(message.reply_to_message.from, message.chat, ctx.TediCross.settings.telegram.useFirstNameInsteadOfUsername);
 		let originalText = "<no text>";
 
 		// Is this a reply to the bot, i.e. to a Discord user?
-		if (message.reply_to_message.from !== undefined && message.reply_to_message.from.id === tgBot.me.id) {
+		if (message.reply_to_message.from !== undefined && message.reply_to_message.from.id === ctx.TediCross.me.id) {
 			// Get the name of the Discord user this is a reply to
 			const dcUsername = message.reply_to_message.text.split("\n")[0];
-			const dcUser = dcBot.channels.get(bridge.discord.channelId).members.find("displayName", dcUsername);
+			const dcUser = ctx.TediCross.dcBot.channels.get(bridge.discord.channelId).members.find(findFn("displayName", new RegExp(dcUsername)));
 			originalAuthor = !R.isNil(dcUser) ? `<@${dcUser.id}>` : dcUsername;
 		}
 
@@ -103,14 +110,14 @@ function messageConverter(message, tgBot, settings, dcBot, bridge) {
 			originalText = message.reply_to_message.text;
 
 			// Is this a reply to the bot, i.e. to a Discord user?
-			if (message.reply_to_message.from !== undefined && message.reply_to_message.from.id === tgBot.me.id) {
+			if (message.reply_to_message.from !== undefined && message.reply_to_message.from.id === ctx.TediCross.me.id) {
 				[ , ...originalText] = message.reply_to_message.text.split("\n");
 				originalText = originalText.join("\n");
 			}
 
-			// Take only the first 100 characters, or up to second newline
-			originalText = originalText.length > 100
-				? originalText.slice(0, 100) + "…"
+			// Take only the first few characters, or up to second newline
+			originalText = originalText.length > ctx.TediCross.settings.discord.replyLength
+				? originalText.slice(0, ctx.TediCross.settings.discord.replyLength) + "…"
 				: originalText
 			;
 			const newlineIndices = [...originalText].reduce((indices, c, i) => {
@@ -133,7 +140,7 @@ function messageConverter(message, tgBot, settings, dcBot, bridge) {
 	const forward_from = message.forward_from || message.forward_from_chat;
 	if (forward_from !== undefined) {
 		// Find the name of the user this was forwarded from
-		const forwardFrom = getDisplayName(forward_from, forward_from, settings.telegram.useFirstNameInsteadOfUsername);
+		const forwardFrom = getDisplayName(forward_from, forward_from, ctx.TediCross.settings.telegram.useFirstNameInsteadOfUsername);
 
 		// Add it to the 'from' text
 		fromName = `${forwardFrom} (forwarded by ${fromName})`;
@@ -142,8 +149,7 @@ function messageConverter(message, tgBot, settings, dcBot, bridge) {
 	return {
 		text,
 		reply,
-		from: fromName,
-		composed: `**${fromName}**\n${text}`
+		from: fromName
 	};
 }
 

@@ -79,6 +79,16 @@ class Settings {
 	}
 
 	/**
+	 * Makes a raw settings object from this object
+	 *
+	 * @returns {Object}	A plain object with the settings
+	 */
+	toObj() {
+		// Hacky way to turn this into a plain object...
+		return JSON.parse(JSON.stringify(this));
+	}
+
+	/**
 	 * Validates a raw settings object, checking if it is usable for creating a Settings object
 	 *
 	 * @param {Object} settings	The object to validate
@@ -127,98 +137,51 @@ class Settings {
 		// Make a clone, to not operate directly on the provided object
 		const settings = R.clone(rawSettings);
 
-		// Check if the bridge map exists
-		if (settings.bridgeMap === undefined || settings.bridgeMap.length === 0) {
-
-			// Check if a bridge on the old format should be migrated
-			const migrate = (
-				settings.telegram.chatID !== undefined ||
-				settings.discord.serverID !== undefined ||
-				settings.discord.channelID !== undefined
-			);
-
-			if (migrate) {
-				// Migrate the old settings to the bridge map
-				settings.bridgeMap = [
-					{
-						name: "Migrated bridge",
-						telegram: settings.telegram.chatID,
-						discord: {
-							guild: settings.discord.serverID,
-							channel: settings.discord.channelID
-						}
-					}
-				];
-
-				// Delete the old properties
-				delete settings.telegram.chatID;
-				delete settings.discord.serverID;
-				delete settings.discord.channelID;
-			}
-		}
-
-		// ...and convert `bridgeMap` to just `bridges`
-		if (settings.bridgeMap !== undefined) {
-
-			// Move it
-			settings.bridges = settings.bridgeMap;
-
-			// Delete the old property
-			delete settings.bridgeMap;
-		}
-
-		// Convert the bridge objects if necessary
+		// 2019-02-16: Add the `crossDeleteOnTelegram` option to Discord
 		for (const bridge of settings.bridges) {
-			if (!(bridge.telegram instanceof Object)) {
-				bridge.telegram = {
-					chatId: bridge.telegram,
-					relayJoinLeaveMessages: true
-				};
-				bridge.discord = {
-					serverId: bridge.discord.guild,
-					channelId: bridge.discord.channel,
-					relayJoinLeaveMessages: true
-				};
-			}
-
-			// Default to bidirectional bridges
-			if (bridge.direction === undefined) {
-				bridge.direction = Bridge.DIRECTION_BOTH;
+			if (bridge.discord.crossDeleteOnTelegram === undefined) {
+				bridge.discord.crossDeleteOnTelegram = true;
 			}
 		}
 
-		// Get rid of the `telegram.auth` object
-		if (settings.telegram.auth !== undefined) {
-			settings.telegram.token = settings.telegram.auth.token;
-			delete settings.telegram.auth;
+		// 2019-04-21: Add the `displayTelegramReplies` option to Discord
+		if (R.isNil(settings.discord.displayTelegramReplies)) {
+			settings.discord.displayTelegramReplies = "embed";
 		}
 
-		// Get rid of the `discord.auth` object
-		if (settings.discord.auth !== undefined) {
-			settings.discord.token = settings.discord.auth.token;
-			delete settings.discord.auth;
+		// 2019-04-21: Add the `replyLength` option to Discord
+		if (R.isNil(settings.discord.replyLength)) {
+			settings.discord.replyLength = 100;
 		}
 
-		// Get rid of the `telegram.commaAfterSenderName` property
-		if (settings.telegram.commaAfterSenderName !== undefined) {
-			delete settings.telegram.commaAfterSenderName;
-		}
-
-		// Split the `relayJoinLeaveMessages`
+		// 2019-04-22: Add the `ignoreCommands` option to Telegram
 		for (const bridge of settings.bridges) {
-			// Do the Telegram part
-			if (bridge.telegram.relayJoinLeaveMessages !== undefined) {
-				bridge.telegram.relayJoinMessages = bridge.telegram.relayJoinLeaveMessages;
-				bridge.telegram.relayLeaveMessages = bridge.telegram.relayJoinLeaveMessages;
-				delete bridge.telegram.relayJoinLeaveMessages;
+			if (R.isNil(bridge.telegram.ignoreCommands) && R.isNil(bridge.telegram.relayCommands)) {
+				bridge.telegram.ignoreCommands = false;
 			}
+		}
 
-			// Do the Discord part
-			if (bridge.discord.relayJoinLeaveMessages !== undefined) {
-				bridge.discord.relayJoinMessages = bridge.discord.relayJoinLeaveMessages;
-				bridge.discord.relayLeaveMessages = bridge.discord.relayJoinLeaveMessages;
-				delete bridge.discord.relayJoinLeaveMessages;
+		// 2019-05-31: Add the `maxReplyLines` option to Discord
+		if (R.isNil(settings.discord.maxReplyLines)) {
+			settings.discord.maxReplyLines = 2;
+		}
+
+		// 2019-11-08: Turn `ignoreCommands` into `relayCommands`, as `ignoreCommands` accidently did the opposite of what it was supposed to do
+		for (const bridge of settings.bridges) {
+			if (R.isNil(bridge.telegram.relayCommands)) {
+				bridge.telegram.relayCommands = bridge.telegram.ignoreCommands;
 			}
+			delete bridge.telegram.ignoreCommands;
+		}
+
+		// 2019-11-08: Remove the `serverId` setting from the discord part of the bridges
+		for (const bridge of settings.bridges) {
+			delete bridge.discord.serverId;
+		}
+
+		// 2020-02-09: Removed the `displayTelegramReplies` option from Discord
+		if (!R.isNil(settings.discord.displayTelegramReplies)) {
+			delete settings.discord.displayTelegramReplies;
 		}
 
 		// All done!
@@ -226,42 +189,18 @@ class Settings {
 	}
 
 	/**
-	 * Creates a new settings object from file
+	 * Creates a new settings object from a plain object
 	 *
-	 * @param {String} filepath	Path to the settings file to use. Absolute path is recommended
+	 * @param {Object} obj	The object to create a settings object from
 	 *
-	 * @returns {Settings}	A settings object
-	 *
-	 * @throws	If the file does not contain a YAML object, or it cannot be read/written
+	 * @returns {Settings}	The settings object
 	 */
-	static fromFile(filepath) {
-		// Read the file
-		let contents = null;
-		try {
-			contents = fs.readFileSync(filepath);
-		} catch (err) {
-			// Could not read it. Check if it exists
-			if (err.code === "ENOENT") {
-				// It didn't. Claim it contained an empty YAML object
-				contents = jsYaml.safeDump({});
-
-				// ...and make it so that it actually does
-				fs.writeFileSync(filepath, contents);
-			} else {
-				// Pass the error on
-				throw err;
-			}
-		}
-
-		// Parse the contents as YAML
-		let settings = jsYaml.safeLoad(contents);
-
-		// Assign defaults and migrate to newest format
-		settings = Settings.applyDefaults(settings);
-		settings = Settings.migrate(settings);
-
-		// Create and return the settings object
-		return new Settings(settings);
+	static fromObj(obj) {
+		return R.compose(
+			R.construct(Settings),
+			Settings.migrate,
+			Settings.applyDefaults
+		)(obj);
 	}
 
 	/**

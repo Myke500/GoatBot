@@ -46,6 +46,20 @@ class BridgeSettingsTelegram {
 		 * @type {Boolean}
 		 */
 		this.relayLeaveMessages = settings.relayLeaveMessages;
+
+		/**
+		 * Whether or not to send the user's name as part of the messages to Discord
+		 *
+		 * @type {Boolean}
+		 */
+		this.sendUsernames = settings.sendUsernames;
+
+		/**
+		 * Whether or not to relay messages starting with "/" (commands)
+		 *
+		 * @type {Boolean}
+		 */
+		this.relayCommands = settings.relayCommands;
 	}
 
 	/**
@@ -69,6 +83,16 @@ class BridgeSettingsTelegram {
 		// Check that relayLeaveMessages is a boolean
 		if (Boolean(settings.relayLeaveMessages) !== settings.relayLeaveMessages) {
 			throw new Error("`settings.relayLeaveMessages` must be a boolean");
+		}
+
+		// Check that sendUsernames is a boolean
+		if (Boolean(settings.sendUsernames) !== settings.sendUsernames) {
+			throw new Error("`settings.sendUsernames` must be a boolean");
+		}
+
+		// Check that relayCommands is a boolean
+		if (Boolean(settings.relayCommands) !== settings.relayCommands) {
+			throw new Error("`settings.relayCommands` must be a boolean");
 		}
 	}
 }

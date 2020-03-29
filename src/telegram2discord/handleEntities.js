@@ -6,6 +6,19 @@
 
 const R = require("ramda");
 
+/*********************
+ * Make some helpers *
+ *********************/
+
+// XXX This is also present in `messageConverter`. Merge somehow
+const findFn = (prop, regexp) => 
+	R.compose(
+		R.not,
+		R.isEmpty,
+		R.match(regexp),
+		R.prop(prop)
+	);
+
 /*****************************
  * Define the entity handler *
  *****************************/
@@ -51,9 +64,10 @@ function handleEntities(text, entities, dcBot, bridge) {
 				// A mention. Substitute the Discord user ID or Discord role ID if one exists
 				// XXX Telegram considers it a mention if it is a valid Telegram username, not necessarily taken. This means the mention matches the regexp /^@[a-zA-Z0-9_]{5,}$/
 				// In turn, this means short usernames and roles in Discord, like '@devs', will not be possible to mention
-				const mentionable = part.substring(1);
-				const dcUser = dcBot.channels.get(bridge.discord.channelId).members.find("displayName", mentionable);
-				const dcRole = dcBot.guilds.get(bridge.discord.serverId).roles.find("name", mentionable);
+				const channel = dcBot.channels.get(bridge.discord.channelId);
+				const mentionable = new RegExp(`^${part.substring(1)}$`, "i");
+				const dcUser = channel.members.find(findFn("displayName", mentionable));
+				const dcRole = channel.guild.roles.find(findFn("name", mentionable));
 				if (!R.isNil(dcUser)) {
 					substitute = `<@${dcUser.id}>`;
 				} else if (!R.isNil(dcRole)) {
@@ -94,10 +108,10 @@ function handleEntities(text, entities, dcBot, bridge) {
 			}
 			case "hashtag": {
 				// Possible name of a Discord channel on the same Discord server
-				const channelName = part.substring(1);
+				const channelName = new RegExp(`^${part.substring(1)}$`);
 
 				// Find out if this is a channel on the bridged Discord server
-				const channel = dcBot.guilds.get(bridge.discord.serverId).channels.find("name", channelName);
+				const channel = dcBot.channels.get(bridge.discord.channelId).guild.channels.find(findFn("name", channelName));
 
 				// Make Discord recognize it as a channel mention
 				if (channel !== null) {
@@ -121,7 +135,7 @@ function handleEntities(text, entities, dcBot, bridge) {
 	}
 
 	// Put the markdown links on the end, if there are any
-	if (markdownLinks.length > 0) {
+	if (!R.isEmpty(markdownLinks)) {
 		substitutedText.push("\n\n");
 		for (let i = 0; i < markdownLinks.length; i++) {
 			// Find out where the corresponding text is

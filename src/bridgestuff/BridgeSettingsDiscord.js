@@ -18,7 +18,6 @@ class BridgeSettingsDiscord {
 	 * Creates a new BridgeSettingsDiscord object
 	 *
 	 * @param {Object} settings	Settings for the Discord side of the bridge
-	 * @param {String} settings.serverId	ID of the Discord server this bridge is part of
 	 * @param {String} settings.channelId	ID of the Discord channel this bridge is part of
 	 * @param {Boolean} settings.relayJoinMessages	Whether or not to relay join messages from Discord to Telegram
 	 * @param {Boolean} settings.relayLeaveMessages	Whether or not to relay leave messages from Discord to Telegram
@@ -27,13 +26,6 @@ class BridgeSettingsDiscord {
 	 */
 	constructor(settings) {
 		BridgeSettingsDiscord.validate(settings);
-
-		/**
-		 * ID of the Discord server this bridge is part of
-		 *
-		 * @type {String}
-		 */
-		this.serverId = settings.serverId;
 
 		/**
 		 * ID of the Discord channel this bridge is part of
@@ -55,6 +47,20 @@ class BridgeSettingsDiscord {
 		 * @type {Boolean}
 		 */
 		this.relayLeaveMessages = settings.relayLeaveMessages;
+
+		/**
+		 * Whether or not to send the user's name as part of the messages to Telegram
+		 *
+		 * @type {Boolean}
+		 */
+		this.sendUsernames = settings.sendUsernames;
+
+		/**
+		 * Whether or not to delete messages on Telegram when a message is deleted on Discord
+		 *
+		 * @type {Boolean}
+		 */
+		this.crossDeleteOnTelegram = settings.crossDeleteOnTelegram;
 	}
 
 	/**
@@ -78,6 +84,16 @@ class BridgeSettingsDiscord {
 		// Check that relayLeaveMessages is a boolean
 		if (Boolean(settings.relayLeaveMessages) !== settings.relayLeaveMessages) {
 			throw new Error("`settings.relayLeaveMessages` must be a boolean");
+		}
+
+		// Check that sendUsernames is a boolean
+		if (Boolean(settings.sendUsernames) !== settings.sendUsernames) {
+			throw new Error("`settings.sendUsernames` must be a boolean");
+		}
+
+		// Check that crossDeleteOnTelegram is a boolean
+		if (Boolean(settings.crossDeleteOnTelegram) !== settings.crossDeleteOnTelegram) {
+			throw new Error("`settings.crossDeleteOnTelegram` must be a boolean");
 		}
 	}
 }
