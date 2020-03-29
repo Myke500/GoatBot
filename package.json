@@ -1,12 +1,12 @@
 {
-  "name": "tedicross",
-  "version": "0.9.11",
-  "description": "Better DiteCross",
+  "name": "GoatBot",
+  "version": "0.2.500",
+  "description": "Almost Better TediCross",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TediCross/TediCross.git"
-  },
+    "url": "git+https://github.com/Myke500/GoatBot.git"
+   },
   "scripts": {
     "start": "node main.js",
     "start-dev": "nodemon main.js -i data/",
